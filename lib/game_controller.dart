@@ -7,6 +7,7 @@ const List<String> _kEmojis = [
   '🦊','🐉','🌙','⚡','🔮','💎','🎯','🌊',
   '🔥','🍄','🦋','🎸','🏆','🌸','🚀','🎭',
   '🦄','🐺','🌈','💫','🎪','🧊','🌺','🦅',
+  '🐬','🦁','🌵','🍀','🎠','🐝',
 ];
 
 enum GameStatus { idle, playing, paused, won, lost }
@@ -23,7 +24,7 @@ class GameController extends ChangeNotifier {
 
   Timer? _timer;
 
-  GameController({GameLevel level = GameLevel.easy}) : _level = level {
+  GameController({required GameLevel level}) : _level = level {
     _initGame();
   }
 
@@ -36,17 +37,14 @@ class GameController extends ChangeNotifier {
     return s < 0 ? 0 : s;
   }
 
-  double get timerProgress => timeLeft / _level.timeSeconds;
-  double get matchProgress => matchedPairs / totalPairs;
-
-  void changeLevel(GameLevel level) {
-    _level = level;
-    _initGame();
-  }
+  double get timerProgress => _level.timeSeconds == 0 ? 0 : timeLeft / _level.timeSeconds;
+  double get matchProgress => totalPairs == 0 ? 0 : matchedPairs / totalPairs;
 
   void _initGame() {
     _timer?.cancel();
-    final pairs = _kEmojis.sublist(0, _level.cardCount ~/ 2);
+    final needed = _level.cardCount ~/ 2;
+    final pool = List<String>.from(_kEmojis)..shuffle(Random());
+    final pairs = pool.sublist(0, needed);
     final all = [...pairs, ...pairs];
     all.shuffle(Random());
     cards = all.asMap().entries
@@ -86,7 +84,6 @@ class GameController extends ChangeNotifier {
     final b = _flippedIndices[1];
 
     if (cards[a].emoji == cards[b].emoji) {
-      // Match!
       Future.delayed(const Duration(milliseconds: 350), () {
         cards[a] = cards[a].copyWith(isMatched: true);
         cards[b] = cards[b].copyWith(isMatched: true);
@@ -101,7 +98,6 @@ class GameController extends ChangeNotifier {
         notifyListeners();
       });
     } else {
-      // No match — flip back
       _locked = true;
       Future.delayed(const Duration(milliseconds: 900), () {
         cards[a] = cards[a].copyWith(isFlipped: false);
