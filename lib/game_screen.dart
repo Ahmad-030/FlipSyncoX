@@ -5,6 +5,9 @@ import 'game_models.dart';
 import 'flip_card.dart';
 import 'stats_bar.dart';
 
+// Must match the enum in main.dart — keep in sync
+enum LevelResult { won, quit }
+
 Color _levelAccent(GameLevel level) {
   switch (level.difficulty) {
     case GameDifficulty.easy:   return const Color(0xFF00FF88);
@@ -16,8 +19,9 @@ Color _levelAccent(GameLevel level) {
 
 class GameScreen extends StatefulWidget {
   final GameLevel level;
-  final VoidCallback? onLevelComplete;
-  const GameScreen({super.key, required this.level, this.onLevelComplete});
+
+  // onLevelComplete REMOVED — screen now just pops with LevelResult.won
+  const GameScreen({super.key, required this.level});
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -30,7 +34,6 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late AnimationController _entryController;
   late Animation<double> _entryAnim;
 
-  // Overlay entries — we manage dialogs as overlays, NOT navigator routes.
   OverlayEntry? _overlayEntry;
 
   GameStatus _lastStatus = GameStatus.idle;
@@ -108,7 +111,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _showOverlay(_buildPauseOverlay());
   }
 
-  // ─── Restart ────────────────────────────────────────────────────────────────
+  // ─── Restart (same level, no pop) ────────────────────────────────────────
   void _restartGame() {
     _removeOverlay();
     _lastStatus    = GameStatus.idle;
@@ -117,19 +120,18 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _entryController.forward(from: 0);
   }
 
-  // ─── Go to main menu ────────────────────────────────────────────────────────
-  void _goToMenu({bool levelWon = false}) {
+  // ─── Go to main menu ─────────────────────────────────────────────────────
+  void _goToMenu() {
     _removeOverlay();
-    if (levelWon) widget.onLevelComplete?.call();
-    // Single pop — back to MainMenuScreen. No double-pop risk.
+    // Pop with no result (null) so MainMenu does NOT advance
     Navigator.of(context).pop();
   }
 
-  // ─── Next level ─────────────────────────────────────────────────────────────
+  // ─── Level won → pop with won result ─────────────────────────────────────
   void _goNextLevel() {
     _removeOverlay();
-    widget.onLevelComplete?.call(); // signals MainMenu to advance
-    Navigator.of(context).pop();
+    // Pop with LevelResult.won so MainMenuScreen can handle saving + next launch
+    Navigator.of(context).pop(LevelResult.won);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -145,7 +147,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           _ctrl.resumeGame();
         },
         onRestart: _restartGame,
-        onMainMenu: () => _goToMenu(),
+        onMainMenu: _goToMenu,
       ),
     );
   }
@@ -160,8 +162,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         accent: _accent,
         won: won,
         onRestart: _restartGame,
-        onNextLevel: won && widget.onLevelComplete != null ? _goNextLevel : null,
-        onMainMenu: () => _goToMenu(levelWon: won),
+        onNextLevel: won ? _goNextLevel : null,
+        onMainMenu: _goToMenu,
       ),
     );
   }
@@ -225,7 +227,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           _TopBar(
             ctrl: _ctrl, accent: _accent,
             onPause: _onPauseTap,
-            onBack: () => Navigator.of(context).pop(),
+            onBack: _goToMenu,
           ),
           const SizedBox(height: 4),
           Padding(
@@ -323,7 +325,6 @@ class _PauseCard extends StatelessWidget {
               Text('${ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${ctrl.level.stage}',
                   style: TextStyle(fontFamily: 'Courier', fontSize: 10,
                       color: Colors.white.withValues(alpha: 0.3), letterSpacing: 3)),
-              // Stats row
               Container(
                 margin: const EdgeInsets.symmetric(vertical: 18),
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -333,9 +334,9 @@ class _PauseCard extends StatelessWidget {
                   border: Border.all(color: accent.withValues(alpha: .12)),
                 ),
                 child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-                  _Stat(label: 'TIME',  value: _fmt(ctrl.timeLeft),                    color: accent),
+                  _Stat(label: 'TIME',  value: _fmt(ctrl.timeLeft),                       color: accent),
                   _VDiv(),
-                  _Stat(label: 'MOVES', value: '${ctrl.moves}',                        color: Colors.white70),
+                  _Stat(label: 'MOVES', value: '${ctrl.moves}',                           color: Colors.white70),
                   _VDiv(),
                   _Stat(label: 'PAIRS', value: '${ctrl.matchedPairs}/${ctrl.totalPairs}', color: accent),
                 ]),
@@ -409,7 +410,6 @@ class _GameOverCardState extends State<_GameOverCard> with SingleTickerProviderS
                 ],
               ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                // Icon ring
                 Container(
                   width: 72, height: 72,
                   decoration: BoxDecoration(

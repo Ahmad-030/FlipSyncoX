@@ -259,6 +259,9 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
   bool _hasProgress        = false;
   bool _loadingProgress    = true;
 
+  // Guard: prevent launching a level while one is already being awaited.
+  bool _launching = false;
+
   @override
   void initState() {
     super.initState();
@@ -290,6 +293,7 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
   @override void dispose() { _entry.dispose(); _glow.dispose(); super.dispose(); }
 
   Future<void> _onNewGame() async {
+    if (_launching) return;
     if (_hasProgress) {
       final confirm = await _showConfirmReset(context);
       if (!confirm) return;
@@ -300,25 +304,44 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
     _launchLevel(0);
   }
 
-  void _onContinue() { if (_hasProgress) _launchLevel(_currentLevelIndex); }
+  void _onContinue() {
+    if (_launching) return;
+    if (_hasProgress) _launchLevel(_currentLevelIndex);
+  }
 
+  // ─── Core launch: push GameScreen, await LevelResult, handle progression ──
   Future<void> _launchLevel(int index) async {
-    final level = kAllLevels[index];
-    final result = await Navigator.push<_LevelResult>(context, _slideRoute(GameScreen(
-      level: level,
-      onLevelComplete: () => Navigator.pop(context, _LevelResult.won),
-    )));
+    if (_launching || !mounted) return;
+    _launching = true;
 
-    if (result == _LevelResult.won) {
-      final nextIndex = index + 1;
-      if (nextIndex >= kAllLevels.length) {
-        await _resetProgress();
-        if (mounted) setState(() { _currentLevelIndex = 0; _hasProgress = false; });
-        if (mounted) _showGameBeatenDialog();
-      } else {
-        await _saveProgress(nextIndex);
-        if (mounted) setState(() { _currentLevelIndex = nextIndex; _hasProgress = true; });
+    try {
+      final level = kAllLevels[index];
+      // GameScreen pops with LevelResult.won on victory, null otherwise.
+      final result = await Navigator.push<LevelResult>(
+        context,
+        _slideRoute(GameScreen(level: level)),
+      );
+
+      if (!mounted) return;
+
+      if (result == LevelResult.won) {
+        final nextIndex = index + 1;
+        if (nextIndex >= kAllLevels.length) {
+          // All 12 levels beaten!
+          await _resetProgress();
+          if (mounted) setState(() { _currentLevelIndex = 0; _hasProgress = false; });
+          if (mounted) _showGameBeatenDialog();
+        } else {
+          await _saveProgress(nextIndex);
+          if (mounted) setState(() { _currentLevelIndex = nextIndex; _hasProgress = true; });
+          // Auto-advance to next level
+          _launching = false; // reset before recursive call
+          if (mounted) _launchLevel(nextIndex);
+          return;
+        }
       }
+    } finally {
+      _launching = false;
     }
   }
 
@@ -436,10 +459,8 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
   }
 }
 
-enum _LevelResult { won, quit }
-
 // ═══════════════════════════════════════════════════════════════════════════
-//  12-LEVEL JOURNEY MAP  (fixed: no negative margins, no unbounded Row)
+//  12-LEVEL JOURNEY MAP
 // ═══════════════════════════════════════════════════════════════════════════
 class _LevelJourneyMap extends StatefulWidget {
   final int  currentIndex;
@@ -484,7 +505,6 @@ class _LevelJourneyMapState extends State<_LevelJourneyMap> with TickerProviderS
         border: Border.all(color: Colors.white.withValues(alpha: .06)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header
         Padding(
           padding: const EdgeInsets.only(left: 2, bottom: 14),
           child: Row(children: [
@@ -499,14 +519,12 @@ class _LevelJourneyMapState extends State<_LevelJourneyMap> with TickerProviderS
                     color: _kText.withValues(alpha: .28))),
           ]),
         ),
-        // One row per difficulty
         ...GameDifficulty.values.map((diff) {
           final accent     = _diffAccent(diff);
           final diffLevels = kAllLevels.where((l) => l.difficulty == diff).toList();
           return Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(children: [
-              // Difficulty label — fixed width
               SizedBox(width: 56, child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -518,11 +536,9 @@ class _LevelJourneyMapState extends State<_LevelJourneyMap> with TickerProviderS
                       color: accent.withValues(alpha: .65))),
                 ],
               )),
-              // Stage nodes + connectors — fills remaining space
               Expanded(child: Row(
                 children: List.generate(diffLevels.length * 2 - 1, (ri) {
                   if (ri.isOdd) {
-                    // Connector line
                     final leftLevelIdx = kAllLevels.indexOf(diffLevels[ri ~/ 2]);
                     final passed = widget.hasProgress && leftLevelIdx < widget.currentIndex;
                     return Expanded(child: Container(
@@ -555,7 +571,6 @@ class _LevelJourneyMapState extends State<_LevelJourneyMap> with TickerProviderS
   }
 }
 
-/// Single node in the level map — NO negative margin, uses Stack instead.
 class _LevelNode extends StatelessWidget {
   final GameLevel level;
   final int levelIdx, currentIndex;
@@ -581,7 +596,6 @@ class _LevelNode extends StatelessWidget {
       child: AnimatedBuilder(
         animation: Listenable.merge([pulseAnim, floatAnim]),
         builder: (_, __) {
-          // Node circle with optional float
           final circle = Transform.translate(
             offset: Offset(0, isCurrent ? floatAnim.value : 0),
             child: Container(
@@ -601,7 +615,6 @@ class _LevelNode extends StatelessWidget {
                       : Colors.white.withValues(alpha: .09),
                   width: isCurrent ? 2 : 1,
                 ),
-                // Glow via shadow — no extra widget needed
                 boxShadow: isCurrent
                     ? [BoxShadow(color: accent.withValues(alpha: .45 * pulseAnim.value), blurRadius: 14, spreadRadius: 2)]
                     : isPassed
