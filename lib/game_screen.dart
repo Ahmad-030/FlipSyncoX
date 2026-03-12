@@ -4,40 +4,45 @@ import 'game_controller.dart';
 import 'game_models.dart';
 import 'flip_card.dart';
 import 'stats_bar.dart';
-import 'pause_overlay.dart';
-import 'game_over_overlay.dart';
+
+// ─── Accent color per level ───────────────────────────────────────────────────
+Color _levelAccent(GameLevel level) {
+  switch (level) {
+    case GameLevel.easy:   return const Color(0xFF00FF88);
+    case GameLevel.medium: return const Color(0xFF00C8FF);
+    case GameLevel.hard:   return const Color(0xFFFF8800);
+    case GameLevel.expert: return const Color(0xFFFF0066);
+  }
+}
 
 class GameScreen extends StatefulWidget {
   final GameLevel level;
-
   const GameScreen({super.key, required this.level});
 
   @override
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen>
-    with TickerProviderStateMixin {
+class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late GameController _ctrl;
 
-  // Ambient glow animation
   late AnimationController _glowController;
   late Animation<double> _glowAnim;
 
-  // Cards entry animation
   late AnimationController _entryController;
   late Animation<double> _entryAnim;
+
+  // Track previous status so we only trigger game-over dialog once
+  GameStatus _lastStatus = GameStatus.idle;
+  bool _dialogShown = false;
 
   @override
   void initState() {
     super.initState();
 
-    _ctrl = GameController(
-      level: widget.level,
-      onStateChanged: () => setState(() {}),
-    );
+    _ctrl = GameController(level: widget.level);
+    _ctrl.addListener(_onControllerChanged);
 
-    // Pulse glow on accent color
     _glowController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -46,10 +51,9 @@ class _GameScreenState extends State<GameScreen>
       CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
     );
 
-    // Cards slide-in on load
     _entryController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 700),
     )..forward();
     _entryAnim = CurvedAnimation(
       parent: _entryController,
@@ -62,45 +66,67 @@ class _GameScreenState extends State<GameScreen>
     ));
   }
 
+  void _onControllerChanged() {
+    if (!mounted) return;
+    setState(() {});
+
+    if (!_dialogShown) {
+      if (_ctrl.status == GameStatus.won && _lastStatus != GameStatus.won) {
+        _dialogShown = true;
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) _showGameOver(true);
+        });
+      } else if (_ctrl.status == GameStatus.lost && _lastStatus != GameStatus.lost) {
+        _dialogShown = true;
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) _showGameOver(false);
+        });
+      }
+    }
+    _lastStatus = _ctrl.status;
+  }
+
   @override
   void dispose() {
+    _ctrl.removeListener(_onControllerChanged);
     _ctrl.dispose();
     _glowController.dispose();
     _entryController.dispose();
     super.dispose();
   }
 
-  Color get _accent => _ctrl.accentColor;
+  Color get _accent => _levelAccent(_ctrl.level);
 
   // ─── PAUSE ────────────────────────────────────────────────────────────────
-  void _onPause() {
-    _ctrl.pause();
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withOpacity(0.75),
-      transitionDuration: const Duration(milliseconds: 250),
-      transitionBuilder: (_, anim, __, child) => FadeTransition(
-        opacity: anim,
-        child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(anim), child: child),
-      ),
-      pageBuilder: (_, __, ___) => PauseOverlay(
-        ctrl: _ctrl,
-        accent: _accent,
-        onResume: () {
-          Navigator.pop(context);
-          _ctrl.resume();
-        },
-        onRestart: () {
-          Navigator.pop(context);
-          _restartGame();
-        },
-        onMainMenu: () {
-          Navigator.pop(context);
-          Navigator.pop(context);
-        },
-      ),
-    );
+  void _onPauseTap() {
+    _ctrl.togglePause();
+    if (_ctrl.status == GameStatus.paused) {
+      showGeneralDialog(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.75),
+        transitionDuration: const Duration(milliseconds: 250),
+        transitionBuilder: (_, anim, __, child) => FadeTransition(
+          opacity: anim,
+          child: ScaleTransition(
+            scale: Tween(begin: 0.92, end: 1.0).animate(anim),
+            child: child,
+          ),
+        ),
+        pageBuilder: (_, __, ___) => _PauseDialog(
+          ctrl: _ctrl,
+          accent: _accent,
+          onRestart: () {
+            Navigator.pop(context);
+            _restartGame();
+          },
+          onMainMenu: () {
+            Navigator.pop(context);
+            Navigator.pop(context);
+          },
+        ),
+      );
+    }
   }
 
   // ─── GAME OVER ────────────────────────────────────────────────────────────
@@ -108,7 +134,7 @@ class _GameScreenState extends State<GameScreen>
     showGeneralDialog(
       context: context,
       barrierDismissible: false,
-      barrierColor: Colors.black.withOpacity(0.8),
+      barrierColor: Colors.black.withValues(alpha: 0.85),
       transitionDuration: const Duration(milliseconds: 400),
       transitionBuilder: (_, anim, __, child) => FadeTransition(
         opacity: anim,
@@ -119,7 +145,7 @@ class _GameScreenState extends State<GameScreen>
           child: child,
         ),
       ),
-      pageBuilder: (_, __, ___) => GameOverOverlay(
+      pageBuilder: (_, __, ___) => _GameOverDialog(
         ctrl: _ctrl,
         accent: _accent,
         won: won,
@@ -136,27 +162,15 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _restartGame() {
+    _lastStatus = GameStatus.idle;
+    _dialogShown = false;
     _ctrl.restart();
     _entryController.forward(from: 0);
   }
 
-  // ─── CARD TAP ─────────────────────────────────────────────────────────────
-  void _onCardTap(int index) {
-    final result = _ctrl.flipCard(index);
-    if (result == FlipResult.win) {
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted) _showGameOver(true);
-      });
-    } else if (result == FlipResult.lose) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) _showGameOver(false);
-      });
-    }
-  }
-
   // ─── GRID ─────────────────────────────────────────────────────────────────
   Widget _buildGrid() {
-    final cfg = _ctrl.config;
+    final cols = _ctrl.level.cols;
     return AnimatedBuilder(
       animation: _entryAnim,
       builder: (_, __) {
@@ -165,7 +179,7 @@ class _GameScreenState extends State<GameScreen>
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: cfg.cols,
+            crossAxisCount: cols,
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
             childAspectRatio: 1.0,
@@ -173,18 +187,17 @@ class _GameScreenState extends State<GameScreen>
           itemCount: _ctrl.cards.length,
           itemBuilder: (context, i) {
             final card = _ctrl.cards[i];
-            // Staggered entry: each card slides up with delay
-            final delay = (i / _ctrl.cards.length) * 0.6;
-            final slideProgress = (((_entryAnim.value - delay) / (1.0 - delay))
-                .clamp(0.0, 1.0));
+            final delay = (i / _ctrl.cards.length) * 0.55;
+            final progress =
+            ((_entryAnim.value - delay) / (1.0 - delay)).clamp(0.0, 1.0);
             return Transform.translate(
-              offset: Offset(0, 30 * (1 - slideProgress)),
+              offset: Offset(0, 28 * (1.0 - progress)),
               child: Opacity(
-                opacity: slideProgress,
+                opacity: progress,
                 child: FlipCard(
                   card: card,
                   accent: _accent,
-                  onTap: () => _onCardTap(i),
+                  onTap: () => _ctrl.flipCard(i),
                 ),
               ),
             );
@@ -197,27 +210,27 @@ class _GameScreenState extends State<GameScreen>
   // ─── BUILD ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final screenSize = MediaQuery.of(context).size;
+    final screenH = MediaQuery.of(context).size.height;
 
     return Scaffold(
       backgroundColor: const Color(0xFF080C1A),
       body: Stack(
         children: [
-          // ── Ambient radial glow background ──
+          // Pulsing ambient glow
           AnimatedBuilder(
             animation: _glowAnim,
             builder: (_, __) => Positioned(
-              top: -screenSize.height * 0.15,
+              top: -screenH * 0.15,
               left: 0,
               right: 0,
               child: Container(
-                height: screenSize.height * 0.55,
+                height: screenH * 0.55,
                 decoration: BoxDecoration(
                   gradient: RadialGradient(
                     center: Alignment.topCenter,
-                    radius: 0.8,
+                    radius: 0.85,
                     colors: [
-                      _accent.withOpacity(0.10 * _glowAnim.value),
+                      _accent.withValues(alpha: 0.10 * _glowAnim.value),
                       Colors.transparent,
                     ],
                   ),
@@ -226,41 +239,29 @@ class _GameScreenState extends State<GameScreen>
             ),
           ),
 
-          // ── Main content ──
+          // Main UI
           SafeArea(
             child: Column(
               children: [
-                // ── Top Bar ──
                 _TopBar(
                   ctrl: _ctrl,
                   accent: _accent,
-                  onPause: _onPause,
+                  onPause: _onPauseTap,
                   onBack: () => Navigator.pop(context),
                 ),
-
-                const SizedBox(height: 6),
-
-                // ── Stats Bar ──
-                StatsBar(ctrl: _ctrl, accent: _accent),
-
-                const SizedBox(height: 8),
-
-                // ── Progress indicator ──
-                _ProgressRow(ctrl: _ctrl, accent: _accent),
-
-                const SizedBox(height: 10),
-
-                // ── Card Grid (scrollable for larger levels) ──
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: _buildGrid(),
-                  ),
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: StatsBar(ctrl: _ctrl, accent: _accent),
                 ),
-
-                // ── Bottom score preview ──
-                _BottomBar(ctrl: _ctrl, accent: _accent),
-
                 const SizedBox(height: 8),
+                _ProgressRow(ctrl: _ctrl, accent: _accent),
+                const SizedBox(height: 6),
+                Expanded(
+                  child: SingleChildScrollView(child: _buildGrid()),
+                ),
+                _ScorePreviewBar(ctrl: _ctrl, accent: _accent),
+                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -288,20 +289,13 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isPaused = ctrl.status == GameStatus.paused;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          // Back button
-          _IconBtn(
-            icon: Icons.arrow_back_ios_new_rounded,
-            accent: accent,
-            onTap: onBack,
-          ),
-
+          _IconBtn(icon: Icons.arrow_back_ios_new_rounded, accent: accent, onTap: onBack),
           const SizedBox(width: 10),
-
-          // Title
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -314,40 +308,26 @@ class _TopBar extends StatelessWidget {
                     letterSpacing: 2.5,
                   ),
                   children: [
-                    const TextSpan(
-                      text: 'FLIP',
-                      style: TextStyle(color: Colors.white),
-                    ),
-                    TextSpan(
-                      text: 'SYNCO',
-                      style: TextStyle(color: accent),
-                    ),
-                    const TextSpan(
-                      text: 'X',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    const TextSpan(text: 'FLIP', style: TextStyle(color: Colors.white)),
+                    TextSpan(text: 'SYNCO', style: TextStyle(color: accent)),
+                    const TextSpan(text: 'X', style: TextStyle(color: Colors.white)),
                   ],
                 ),
               ),
               Text(
-                ctrl.config.label.toUpperCase(),
+                ctrl.level.label.toUpperCase(),
                 style: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 10,
-                  color: accent.withOpacity(0.7),
+                  color: accent.withValues(alpha: 0.7),
                   letterSpacing: 3,
                 ),
               ),
             ],
           ),
-
           const Spacer(),
-
-          // Pause button
           _IconBtn(
-            icon: ctrl.isPaused
-                ? Icons.play_arrow_rounded
-                : Icons.pause_rounded,
+            icon: isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
             accent: accent,
             onTap: onPause,
             large: true,
@@ -359,12 +339,11 @@ class _TopBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROGRESS ROW — pairs matched bar
+// PROGRESS ROW
 // ─────────────────────────────────────────────────────────────────────────────
 class _ProgressRow extends StatelessWidget {
   final GameController ctrl;
   final Color accent;
-
   const _ProgressRow({required this.ctrl, required this.accent});
 
   @override
@@ -386,7 +365,7 @@ class _ProgressRow extends StatelessWidget {
                 style: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 9,
-                  color: Colors.white.withOpacity(0.35),
+                  color: Colors.white.withValues(alpha: 0.35),
                   letterSpacing: 2,
                 ),
               ),
@@ -395,8 +374,8 @@ class _ProgressRow extends StatelessWidget {
                 style: TextStyle(
                   fontFamily: 'Courier',
                   fontSize: 11,
-                  color: accent,
                   fontWeight: FontWeight.bold,
+                  color: accent,
                   letterSpacing: 1,
                 ),
               ),
@@ -408,7 +387,7 @@ class _ProgressRow extends StatelessWidget {
             child: LinearProgressIndicator(
               value: pct,
               minHeight: 4,
-              backgroundColor: Colors.white.withOpacity(0.06),
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
               valueColor: AlwaysStoppedAnimation<Color>(accent),
             ),
           ),
@@ -419,26 +398,23 @@ class _ProgressRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BOTTOM BAR — live score preview
+// SCORE PREVIEW BAR
 // ─────────────────────────────────────────────────────────────────────────────
-class _BottomBar extends StatelessWidget {
+class _ScorePreviewBar extends StatelessWidget {
   final GameController ctrl;
   final Color accent;
-
-  const _BottomBar({required this.ctrl, required this.accent});
+  const _ScorePreviewBar({required this.ctrl, required this.accent});
 
   @override
   Widget build(BuildContext context) {
-    final liveScore = ctrl.liveScore;
-
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.03),
+          color: Colors.white.withValues(alpha: 0.03),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: accent.withOpacity(0.12)),
+          border: Border.all(color: accent.withValues(alpha: 0.15)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -448,21 +424,18 @@ class _BottomBar extends StatelessWidget {
               style: TextStyle(
                 fontFamily: 'Courier',
                 fontSize: 10,
-                color: Colors.white.withOpacity(0.3),
+                color: Colors.white.withValues(alpha: 0.3),
                 letterSpacing: 2,
               ),
             ),
             Text(
-              '$liveScore',
+              '${ctrl.currentScore}',
               style: TextStyle(
                 fontFamily: 'Courier',
-                fontSize: 20,
+                fontSize: 22,
                 fontWeight: FontWeight.w900,
                 color: accent,
-                letterSpacing: 1,
-                shadows: [
-                  Shadow(color: accent.withOpacity(0.6), blurRadius: 12),
-                ],
+                shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 12)],
               ),
             ),
           ],
@@ -473,7 +446,7 @@ class _BottomBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REUSABLE ICON BUTTON
+// ICON BUTTON
 // ─────────────────────────────────────────────────────────────────────────────
 class _IconBtn extends StatelessWidget {
   final IconData icon;
@@ -490,20 +463,247 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = large ? 44.0 : 36.0;
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: large ? 44 : 36,
-        height: large ? 44 : 36,
+        width: size,
+        height: size,
         decoration: BoxDecoration(
-          color: accent.withOpacity(0.08),
+          color: accent.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: accent.withOpacity(0.25)),
+          border: Border.all(color: accent.withValues(alpha: 0.25)),
         ),
-        child: Icon(
-          icon,
-          color: accent,
-          size: large ? 22 : 17,
+        child: Icon(icon, color: accent, size: large ? 22 : 17),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAUSE DIALOG
+// ─────────────────────────────────────────────────────────────────────────────
+class _PauseDialog extends StatelessWidget {
+  final GameController ctrl;
+  final Color accent;
+  final VoidCallback onRestart;
+  final VoidCallback onMainMenu;
+
+  const _PauseDialog({
+    required this.ctrl,
+    required this.accent,
+    required this.onRestart,
+    required this.onMainMenu,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF080c1a).withValues(alpha: 0.88),
+      child: Center(
+        child: Container(
+          width: 260,
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 36),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: Colors.white.withValues(alpha: 0.04),
+            border: Border.all(color: accent.withValues(alpha: 0.35)),
+            boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.12), blurRadius: 40)],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('⏸', style: TextStyle(fontSize: 36)),
+              const SizedBox(height: 8),
+              const Text(
+                'PAUSED',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: 4,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'GAME IS PAUSED',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.white.withValues(alpha: 0.3),
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(height: 28),
+              _OverlayBtn(
+                label: '▶  RESUME',
+                color: accent,
+                onTap: () {
+                  ctrl.togglePause();
+                  Navigator.pop(context);
+                },
+              ),
+              const SizedBox(height: 8),
+              _OverlayBtn(label: '↺  RESTART', color: Colors.white54, onTap: onRestart),
+              const SizedBox(height: 8),
+              _OverlayBtn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: onMainMenu),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAME OVER DIALOG
+// ─────────────────────────────────────────────────────────────────────────────
+class _GameOverDialog extends StatelessWidget {
+  final GameController ctrl;
+  final Color accent;
+  final bool won;
+  final VoidCallback onRestart;
+  final VoidCallback onMainMenu;
+
+  const _GameOverDialog({
+    required this.ctrl,
+    required this.accent,
+    required this.won,
+    required this.onRestart,
+    required this.onMainMenu,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = won ? accent : const Color(0xFFff3344);
+    return Container(
+      color: const Color(0xFF080c1a).withValues(alpha: 0.92),
+      child: Center(
+        child: Container(
+          width: 280,
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 36),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: Colors.white.withValues(alpha: 0.04),
+            border: Border.all(color: borderColor.withValues(alpha: 0.45)),
+            boxShadow: [BoxShadow(color: borderColor.withValues(alpha: 0.18), blurRadius: 48)],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(won ? '🏆' : '💀', style: const TextStyle(fontSize: 52)),
+              const SizedBox(height: 10),
+              Text(
+                won ? 'YOU WIN!' : 'GAME OVER',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: borderColor,
+                  letterSpacing: 3,
+                  shadows: [Shadow(color: borderColor.withValues(alpha: 0.7), blurRadius: 16)],
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (won) ...[
+                Text(
+                  'FINAL SCORE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.white.withValues(alpha: 0.35),
+                    letterSpacing: 3,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${ctrl.finalScore}',
+                  style: TextStyle(
+                    fontSize: 54,
+                    fontWeight: FontWeight.bold,
+                    color: accent,
+                    shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 20)],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _StatRow(label: 'Time Left', value: '${ctrl.timeLeft}s', accent: accent),
+                _StatRow(label: 'Moves Used', value: '${ctrl.moves}', accent: accent),
+                _StatRow(label: 'Level', value: ctrl.level.label, accent: accent),
+                const SizedBox(height: 20),
+              ] else ...[
+                Text(
+                  'Time ran out!\nBetter luck next time.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.45),
+                    height: 1.6,
+                  ),
+                ),
+                const SizedBox(height: 24),
+              ],
+              _OverlayBtn(label: '↺  PLAY AGAIN', color: accent, onTap: onRestart),
+              const SizedBox(height: 8),
+              _OverlayBtn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: onMainMenu),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color accent;
+  const _StatRow({required this.label, required this.value, required this.accent});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.4), letterSpacing: 1),
+          ),
+          Text(
+            value,
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: accent),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OverlayBtn extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _OverlayBtn({required this.label, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          color: Colors.white.withValues(alpha: 0.04),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
         ),
       ),
     );
