@@ -29,7 +29,7 @@ class GameController extends ChangeNotifier {
   }
 
   GameLevel get level => _level;
-  int get totalPairs => _level.cardCount ~/ 2;
+  int get totalPairs  => _level.cardCount ~/ 2;
   int get matchedPairs => cards.where((c) => c.isMatched).length ~/ 2;
 
   int get currentScore {
@@ -38,23 +38,20 @@ class GameController extends ChangeNotifier {
   }
 
   double get timerProgress => _level.timeSeconds == 0 ? 0 : timeLeft / _level.timeSeconds;
-  double get matchProgress => totalPairs == 0 ? 0 : matchedPairs / totalPairs;
+  double get matchProgress  => totalPairs == 0 ? 0 : matchedPairs / totalPairs;
 
   void _initGame() {
     _timer?.cancel();
     final needed = _level.cardCount ~/ 2;
-    final pool = List<String>.from(_kEmojis)..shuffle(Random());
-    final pairs = pool.sublist(0, needed);
-    final all = [...pairs, ...pairs];
-    all.shuffle(Random());
-    cards = all.asMap().entries
-        .map((e) => CardModel(id: e.key, emoji: e.value))
-        .toList();
+    final pool   = List<String>.from(_kEmojis)..shuffle(Random());
+    final pairs  = pool.sublist(0, needed);
+    final all    = [...pairs, ...pairs]..shuffle(Random());
+    cards = all.asMap().entries.map((e) => CardModel(id: e.key, emoji: e.value)).toList();
     _flippedIndices = [];
-    _locked = false;
-    moves = 0;
-    timeLeft = _level.timeSeconds;
-    status = GameStatus.idle;
+    _locked   = false;
+    moves     = 0;
+    timeLeft  = _level.timeSeconds;
+    status    = GameStatus.idle;
     finalScore = 0;
     notifyListeners();
   }
@@ -89,7 +86,6 @@ class GameController extends ChangeNotifier {
         cards[b] = cards[b].copyWith(isMatched: true);
         _flippedIndices = [];
         _locked = false;
-
         if (cards.every((c) => c.isMatched)) {
           _timer?.cancel();
           finalScore = currentScore;
@@ -125,14 +121,28 @@ class GameController extends ChangeNotifier {
     });
   }
 
+  /// Pause the game (stops timer, sets status to paused).
+  void pauseGame() {
+    if (status != GameStatus.playing && status != GameStatus.idle) return;
+    _timer?.cancel();
+    status = GameStatus.paused;
+    notifyListeners();
+  }
+
+  /// Resume the game (restarts timer from current timeLeft).
+  void resumeGame() {
+    if (status != GameStatus.paused) return;
+    _startTimer();
+    notifyListeners();
+  }
+
+  /// Legacy toggle — kept for compatibility.
   void togglePause() {
     if (status == GameStatus.playing) {
-      _timer?.cancel();
-      status = GameStatus.paused;
+      pauseGame();
     } else if (status == GameStatus.paused) {
-      _startTimer();
+      resumeGame();
     }
-    notifyListeners();
   }
 
   @override

@@ -17,7 +17,6 @@ Color _levelAccent(GameLevel level) {
 class GameScreen extends StatefulWidget {
   final GameLevel level;
   final VoidCallback? onLevelComplete;
-
   const GameScreen({super.key, required this.level, this.onLevelComplete});
 
   @override
@@ -31,8 +30,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   late AnimationController _entryController;
   late Animation<double> _entryAnim;
 
+  // Overlay entries — we manage dialogs as overlays, NOT navigator routes.
+  OverlayEntry? _overlayEntry;
+
   GameStatus _lastStatus = GameStatus.idle;
-  bool _dialogShown = false;
+  bool _gameOverShown = false;
 
   @override
   void initState() {
@@ -58,16 +60,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   void _onControllerChanged() {
     if (!mounted) return;
     setState(() {});
-    if (!_dialogShown) {
+    if (!_gameOverShown) {
       if (_ctrl.status == GameStatus.won && _lastStatus != GameStatus.won) {
-        _dialogShown = true;
+        _gameOverShown = true;
         Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) _showGameOver(true);
+          if (mounted) _showOverlay(_buildGameOverOverlay(won: true));
         });
       } else if (_ctrl.status == GameStatus.lost && _lastStatus != GameStatus.lost) {
-        _dialogShown = true;
+        _gameOverShown = true;
         Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted) _showGameOver(false);
+          if (mounted) _showOverlay(_buildGameOverOverlay(won: false));
         });
       }
     }
@@ -76,6 +78,8 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
     _ctrl.removeListener(_onControllerChanged);
     _ctrl.dispose();
     _glowController.dispose();
@@ -85,67 +89,86 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
 
   Color get _accent => _levelAccent(_ctrl.level);
 
+  // ─── Overlay helpers ────────────────────────────────────────────────────────
+  void _showOverlay(Widget child) {
+    _removeOverlay();
+    _overlayEntry = OverlayEntry(builder: (_) => child);
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  // ─── Pause ──────────────────────────────────────────────────────────────────
   void _onPauseTap() {
-    _ctrl.togglePause();
-    if (_ctrl.status == GameStatus.paused) {
-      showGeneralDialog(
-        context: context,
-        barrierDismissible: false,
-        barrierColor: Colors.black.withValues(alpha: 0.75),
-        transitionDuration: const Duration(milliseconds: 250),
-        transitionBuilder: (_, anim, __, child) => FadeTransition(
-          opacity: anim,
-          child: ScaleTransition(scale: Tween(begin: 0.92, end: 1.0).animate(anim), child: child),
-        ),
-        pageBuilder: (_, __, ___) => _PauseDialog(
-          ctrl: _ctrl, accent: _accent,
-          onRestart: () { Navigator.pop(context); _restartGame(); },
-          onMainMenu: () { Navigator.pop(context); Navigator.pop(context); },
-        ),
-      );
-    }
+    if (_ctrl.status != GameStatus.playing && _ctrl.status != GameStatus.idle) return;
+    _ctrl.pauseGame();
+    _showOverlay(_buildPauseOverlay());
   }
 
-  void _showGameOver(bool won) {
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.85),
-      transitionDuration: const Duration(milliseconds: 400),
-      transitionBuilder: (_, anim, __, child) => FadeTransition(
-        opacity: anim,
-        child: ScaleTransition(
-          scale: Tween(begin: 0.85, end: 1.0)
-              .animate(CurvedAnimation(parent: anim, curve: Curves.easeOutBack)),
-          child: child,
-        ),
-      ),
-      pageBuilder: (_, __, ___) => _GameOverDialog(
-        ctrl: _ctrl, accent: _accent, won: won,
-        onRestart: () { Navigator.pop(context); _restartGame(); },
-        onNextLevel: won && widget.onLevelComplete != null
-            ? () {
-          Navigator.pop(context);
-          widget.onLevelComplete?.call();
-          Navigator.pop(context);
-        }
-            : null,
-        onMainMenu: () {
-          if (won) widget.onLevelComplete?.call();
-          Navigator.pop(context);
-          Navigator.pop(context);
-        },
-      ),
-    );
-  }
-
+  // ─── Restart ────────────────────────────────────────────────────────────────
   void _restartGame() {
-    _lastStatus = GameStatus.idle;
-    _dialogShown = false;
+    _removeOverlay();
+    _lastStatus    = GameStatus.idle;
+    _gameOverShown = false;
     _ctrl.restart();
     _entryController.forward(from: 0);
   }
 
+  // ─── Go to main menu ────────────────────────────────────────────────────────
+  void _goToMenu({bool levelWon = false}) {
+    _removeOverlay();
+    if (levelWon) widget.onLevelComplete?.call();
+    // Single pop — back to MainMenuScreen. No double-pop risk.
+    Navigator.of(context).pop();
+  }
+
+  // ─── Next level ─────────────────────────────────────────────────────────────
+  void _goNextLevel() {
+    _removeOverlay();
+    widget.onLevelComplete?.call(); // signals MainMenu to advance
+    Navigator.of(context).pop();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BUILD PAUSE OVERLAY
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildPauseOverlay() {
+    return _AnimatedOverlay(
+      child: _PauseCard(
+        ctrl: _ctrl,
+        accent: _accent,
+        onResume: () {
+          _removeOverlay();
+          _ctrl.resumeGame();
+        },
+        onRestart: _restartGame,
+        onMainMenu: () => _goToMenu(),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BUILD GAME OVER OVERLAY
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildGameOverOverlay({required bool won}) {
+    return _AnimatedOverlay(
+      child: _GameOverCard(
+        ctrl: _ctrl,
+        accent: _accent,
+        won: won,
+        onRestart: _restartGame,
+        onNextLevel: won && widget.onLevelComplete != null ? _goNextLevel : null,
+        onMainMenu: () => _goToMenu(levelWon: won),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  CARD GRID
+  // ══════════════════════════════════════════════════════════════════════════
   Widget _buildGrid() {
     final cols = _ctrl.level.cols;
     return AnimatedBuilder(
@@ -159,19 +182,24 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         ),
         itemCount: _ctrl.cards.length,
         itemBuilder: (context, i) {
-          final card = _ctrl.cards[i];
-          final delay = (i / _ctrl.cards.length) * 0.55;
+          final card     = _ctrl.cards[i];
+          final delay    = (i / _ctrl.cards.length) * 0.55;
           final progress = ((_entryAnim.value - delay) / (1.0 - delay)).clamp(0.0, 1.0);
           return Transform.translate(
             offset: Offset(0, 28 * (1.0 - progress)),
-            child: Opacity(opacity: progress,
-                child: FlipCard(card: card, accent: _accent, onTap: () => _ctrl.flipCard(i))),
+            child: Opacity(
+              opacity: progress,
+              child: FlipCard(card: card, accent: _accent, onTap: () => _ctrl.flipCard(i)),
+            ),
           );
         },
       ),
     );
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  MAIN BUILD
+  // ══════════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final screenH = MediaQuery.of(context).size.height;
@@ -194,10 +222,16 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           ),
         ),
         SafeArea(child: Column(children: [
-          _TopBar(ctrl: _ctrl, accent: _accent, onPause: _onPauseTap, onBack: () => Navigator.pop(context)),
+          _TopBar(
+            ctrl: _ctrl, accent: _accent,
+            onPause: _onPauseTap,
+            onBack: () => Navigator.of(context).pop(),
+          ),
           const SizedBox(height: 4),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: StatsBar(ctrl: _ctrl, accent: _accent)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: StatsBar(ctrl: _ctrl, accent: _accent),
+          ),
           const SizedBox(height: 8),
           _ProgressRow(ctrl: _ctrl, accent: _accent),
           const SizedBox(height: 6),
@@ -210,6 +244,249 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  ANIMATED OVERLAY WRAPPER  (fade + scale in)
+// ═══════════════════════════════════════════════════════════════════════════
+class _AnimatedOverlay extends StatefulWidget {
+  final Widget child;
+  const _AnimatedOverlay({required this.child});
+  @override State<_AnimatedOverlay> createState() => _AnimatedOverlayState();
+}
+
+class _AnimatedOverlayState extends State<_AnimatedOverlay> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  late final Animation<double> _fade, _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 300))..forward();
+    _fade  = CurvedAnimation(parent: _c, curve: Curves.easeOut);
+    _scale = Tween<double>(begin: 0.88, end: 1.0)
+        .animate(CurvedAnimation(parent: _c, curve: Curves.easeOutBack));
+  }
+
+  @override void dispose() { _c.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+    opacity: _fade,
+    child: ScaleTransition(
+      scale: _scale,
+      child: widget.child,
+    ),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PAUSE CARD
+// ═══════════════════════════════════════════════════════════════════════════
+class _PauseCard extends StatelessWidget {
+  final GameController ctrl;
+  final Color accent;
+  final VoidCallback onResume, onRestart, onMainMenu;
+
+  const _PauseCard({
+    required this.ctrl, required this.accent,
+    required this.onResume, required this.onRestart, required this.onMainMenu,
+  });
+
+  static String _fmt(int s) =>
+      '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        color: const Color(0xFF080c1a).withValues(alpha: 0.92),
+        child: Center(
+          child: Container(
+            width: 290,
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              color: const Color(0xFF0B0F1C),
+              border: Border.all(color: accent.withValues(alpha: 0.45), width: 1.5),
+              boxShadow: [
+                BoxShadow(color: accent.withValues(alpha: 0.20), blurRadius: 48),
+                const BoxShadow(color: Colors.black54, blurRadius: 20),
+              ],
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              _PulsingIcon(accent: accent),
+              const SizedBox(height: 10),
+              const Text('PAUSED', style: TextStyle(
+                  fontFamily: 'Courier', fontSize: 24,
+                  fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 4)),
+              const SizedBox(height: 4),
+              Text('${ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${ctrl.level.stage}',
+                  style: TextStyle(fontFamily: 'Courier', fontSize: 10,
+                      color: Colors.white.withValues(alpha: 0.3), letterSpacing: 3)),
+              // Stats row
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.white.withValues(alpha: .03),
+                  border: Border.all(color: accent.withValues(alpha: .12)),
+                ),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+                  _Stat(label: 'TIME',  value: _fmt(ctrl.timeLeft),                    color: accent),
+                  _VDiv(),
+                  _Stat(label: 'MOVES', value: '${ctrl.moves}',                        color: Colors.white70),
+                  _VDiv(),
+                  _Stat(label: 'PAIRS', value: '${ctrl.matchedPairs}/${ctrl.totalPairs}', color: accent),
+                ]),
+              ),
+              _PrimaryBtn(label: '▶  RESUME',    color: accent,         onTap: onResume),
+              const SizedBox(height: 10),
+              _SecBtn(label: '↺  RESTART',   color: Colors.white60, onTap: onRestart),
+              const SizedBox(height: 8),
+              _SecBtn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: onMainMenu),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GAME OVER CARD
+// ═══════════════════════════════════════════════════════════════════════════
+class _GameOverCard extends StatefulWidget {
+  final GameController ctrl;
+  final Color accent;
+  final bool won;
+  final VoidCallback onRestart, onMainMenu;
+  final VoidCallback? onNextLevel;
+
+  const _GameOverCard({
+    required this.ctrl, required this.accent, required this.won,
+    required this.onRestart, required this.onMainMenu, this.onNextLevel,
+  });
+
+  @override State<_GameOverCard> createState() => _GameOverCardState();
+}
+
+class _GameOverCardState extends State<_GameOverCard> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+  late final Animation<double> _glow;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
+      ..repeat(reverse: true);
+    _glow = Tween<double>(begin: .45, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+  }
+
+  @override void dispose() { _pulse.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final bc = widget.won ? widget.accent : const Color(0xFFff3344);
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        color: const Color(0xFF080c1a).withValues(alpha: 0.92),
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _glow,
+            builder: (_, __) => Container(
+              width: 300,
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                color: const Color(0xFF0B0F1C),
+                border: Border.all(color: bc.withValues(alpha: .55 * _glow.value), width: 1.5),
+                boxShadow: [
+                  BoxShadow(color: bc.withValues(alpha: .25 * _glow.value), blurRadius: 50),
+                  const BoxShadow(color: Colors.black54, blurRadius: 20),
+                ],
+              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                // Icon ring
+                Container(
+                  width: 72, height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: bc.withValues(alpha: .1),
+                    border: Border.all(color: bc.withValues(alpha: .35 * _glow.value)),
+                    boxShadow: [BoxShadow(color: bc.withValues(alpha: .3 * _glow.value), blurRadius: 22)],
+                  ),
+                  child: Center(child: Text(widget.won ? '🏆' : '💀',
+                      style: const TextStyle(fontSize: 34))),
+                ),
+                const SizedBox(height: 12),
+                Text(widget.won ? 'LEVEL CLEAR!' : 'GAME OVER',
+                    style: TextStyle(fontFamily: 'Courier', fontSize: 22,
+                        fontWeight: FontWeight.bold, color: bc, letterSpacing: 3,
+                        shadows: [Shadow(color: bc.withValues(alpha: .7 * _glow.value), blurRadius: 16)])),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    color: bc.withValues(alpha: .1),
+                    border: Border.all(color: bc.withValues(alpha: .25)),
+                  ),
+                  child: Text(
+                      '${widget.ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${widget.ctrl.level.stage}',
+                      style: TextStyle(fontFamily: 'Courier', fontSize: 9,
+                          color: bc.withValues(alpha: .8), letterSpacing: 2)),
+                ),
+                const SizedBox(height: 16),
+
+                if (widget.won) ...[
+                  Text('FINAL SCORE', style: TextStyle(fontFamily: 'Courier', fontSize: 9,
+                      color: Colors.white.withValues(alpha: .35), letterSpacing: 3)),
+                  const SizedBox(height: 2),
+                  Text('${widget.ctrl.finalScore}',
+                      style: TextStyle(fontFamily: 'Courier', fontSize: 48,
+                          fontWeight: FontWeight.bold, color: widget.accent,
+                          shadows: [Shadow(color: widget.accent.withValues(alpha: .65 * _glow.value), blurRadius: 20)])),
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    _Chip(label: 'TIME LEFT', value: '${widget.ctrl.timeLeft}s', color: widget.accent),
+                    const SizedBox(width: 6),
+                    _Chip(label: 'MOVES',     value: '${widget.ctrl.moves}',     color: widget.accent),
+                    const SizedBox(width: 6),
+                    _Chip(label: 'PAIRS',     value: '${widget.ctrl.totalPairs}',color: widget.accent),
+                  ]),
+                  const SizedBox(height: 18),
+                  if (widget.onNextLevel != null) ...[
+                    _PrimaryBtn(label: '▶  NEXT LEVEL', color: widget.accent, onTap: widget.onNextLevel!),
+                    const SizedBox(height: 8),
+                    _SecBtn(label: '↺  REPLAY', color: Colors.white54, onTap: widget.onRestart),
+                  ] else ...[
+                    _PrimaryBtn(label: '🏆  ALL DONE!', color: widget.accent, onTap: widget.onMainMenu),
+                    const SizedBox(height: 8),
+                    _SecBtn(label: '↺  REPLAY', color: Colors.white54, onTap: widget.onRestart),
+                  ],
+                ] else ...[
+                  Text('Time ran out!\nBetter luck next time.', textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: .45), height: 1.6)),
+                  const SizedBox(height: 20),
+                  _PrimaryBtn(label: '↺  TRY AGAIN', color: widget.accent, onTap: widget.onRestart),
+                ],
+                const SizedBox(height: 8),
+                _SecBtn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: widget.onMainMenu),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOP BAR
+// ═══════════════════════════════════════════════════════════════════════════
 class _TopBar extends StatelessWidget {
   final GameController ctrl;
   final Color accent;
@@ -218,7 +495,7 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPaused = ctrl.status == GameStatus.paused;
+    final canPause = ctrl.status == GameStatus.playing || ctrl.status == GameStatus.idle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(children: [
@@ -229,9 +506,9 @@ class _TopBar extends StatelessWidget {
             style: const TextStyle(fontFamily: 'Courier', fontSize: 20,
                 fontWeight: FontWeight.w900, letterSpacing: 2.5),
             children: [
-              const TextSpan(text: 'FLIP', style: TextStyle(color: Colors.white)),
+              const TextSpan(text: 'FLIP',  style: TextStyle(color: Colors.white)),
               TextSpan(text: 'SYNCO', style: TextStyle(color: accent)),
-              const TextSpan(text: 'X', style: TextStyle(color: Colors.white)),
+              const TextSpan(text: 'X',     style: TextStyle(color: Colors.white)),
             ],
           )),
           Text('${ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${ctrl.level.stage}',
@@ -239,13 +516,20 @@ class _TopBar extends StatelessWidget {
                   color: accent.withValues(alpha: 0.7), letterSpacing: 3)),
         ]),
         const Spacer(),
-        _IconBtn(icon: isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-            accent: accent, onTap: onPause, large: true),
+        _IconBtn(
+          icon: Icons.pause_rounded,
+          accent: canPause ? accent : accent.withValues(alpha: .3),
+          onTap: canPause ? onPause : () {},
+          large: true,
+        ),
       ]),
     );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  PROGRESS ROW
+// ═══════════════════════════════════════════════════════════════════════════
 class _ProgressRow extends StatelessWidget {
   final GameController ctrl;
   final Color accent;
@@ -267,15 +551,17 @@ class _ProgressRow extends StatelessWidget {
         ]),
         const SizedBox(height: 5),
         ClipRRect(borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(value: pct, minHeight: 4,
-              backgroundColor: Colors.white.withValues(alpha: 0.06),
-              valueColor: AlwaysStoppedAnimation<Color>(accent)),
-        ),
+            child: LinearProgressIndicator(value: pct, minHeight: 4,
+                backgroundColor: Colors.white.withValues(alpha: 0.06),
+                valueColor: AlwaysStoppedAnimation<Color>(accent))),
       ]),
     );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SCORE PREVIEW BAR
+// ═══════════════════════════════════════════════════════════════════════════
 class _ScorePreviewBar extends StatelessWidget {
   final GameController ctrl;
   final Color accent;
@@ -304,6 +590,9 @@ class _ScorePreviewBar extends StatelessWidget {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  SHARED SMALL WIDGETS
+// ═══════════════════════════════════════════════════════════════════════════
 class _IconBtn extends StatelessWidget {
   final IconData icon;
   final Color accent;
@@ -329,182 +618,76 @@ class _IconBtn extends StatelessWidget {
   }
 }
 
-class _PauseDialog extends StatelessWidget {
-  final GameController ctrl;
+class _PulsingIcon extends StatefulWidget {
   final Color accent;
-  final VoidCallback onRestart, onMainMenu;
-  const _PauseDialog({required this.ctrl, required this.accent, required this.onRestart, required this.onMainMenu});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: const Color(0xFF080c1a).withValues(alpha: 0.92),
-      child: Center(
-        child: Container(
-          width: 280,
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 36),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            color: const Color(0xFF0B0F1C),
-            border: Border.all(color: accent.withValues(alpha: 0.35)),
-            boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.15), blurRadius: 40)],
-          ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('⏸', style: TextStyle(fontSize: 40)),
-            const SizedBox(height: 10),
-            const Text('PAUSED', style: TextStyle(fontFamily: 'Courier', fontSize: 22,
-                fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 4)),
-            const SizedBox(height: 4),
-            Text('${ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${ctrl.level.stage}',
-                style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.3), letterSpacing: 2)),
-            const SizedBox(height: 28),
-            _PrimaryBtn(label: '▶  RESUME', color: accent,
-                onTap: () { ctrl.togglePause(); Navigator.pop(context); }),
-            const SizedBox(height: 8),
-            _Btn(label: '↺  RESTART', color: Colors.white54, onTap: onRestart),
-            const SizedBox(height: 8),
-            _Btn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: onMainMenu),
-          ]),
-        ),
-      ),
-    );
-  }
+  const _PulsingIcon({required this.accent});
+  @override State<_PulsingIcon> createState() => _PulsingIconState();
 }
 
-class _GameOverDialog extends StatefulWidget {
-  final GameController ctrl;
-  final Color accent;
-  final bool won;
-  final VoidCallback onRestart, onMainMenu;
-  final VoidCallback? onNextLevel;
-  const _GameOverDialog({
-    required this.ctrl, required this.accent, required this.won,
-    required this.onRestart, required this.onMainMenu, this.onNextLevel,
-  });
-  @override State<_GameOverDialog> createState() => _GameOverDialogState();
-}
-
-class _GameOverDialogState extends State<_GameOverDialog> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
-  late final Animation<double> _glow;
-  @override
-  void initState() {
+class _PulsingIconState extends State<_PulsingIcon> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  late final Animation<double> _s;
+  @override void initState() {
     super.initState();
-    _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200))
-      ..repeat(reverse: true);
-    _glow = Tween<double>(begin: 0.5, end: 1.0)
-        .animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat(reverse: true);
+    _s = Tween<double>(begin: .93, end: 1.07).animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut));
   }
-  @override void dispose() { _pulse.dispose(); super.dispose(); }
-
+  @override void dispose() { _c.dispose(); super.dispose(); }
   @override
-  Widget build(BuildContext context) {
-    final borderColor = widget.won ? widget.accent : const Color(0xFFff3344);
-    return Container(
-      color: const Color(0xFF080c1a).withValues(alpha: 0.92),
-      child: Center(
-        child: AnimatedBuilder(
-          animation: _glow,
-          builder: (_, __) => Container(
-            width: 300,
-            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 30),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
-              color: const Color(0xFF0B0F1C),
-              border: Border.all(color: borderColor.withValues(alpha: 0.5 * _glow.value), width: 1.5),
-              boxShadow: [
-                BoxShadow(color: borderColor.withValues(alpha: 0.22 * _glow.value), blurRadius: 50),
-                const BoxShadow(color: Colors.black54, blurRadius: 20),
-              ],
-            ),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 70, height: 70,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: borderColor.withValues(alpha: 0.1),
-                  border: Border.all(color: borderColor.withValues(alpha: 0.3 * _glow.value)),
-                  boxShadow: [BoxShadow(color: borderColor.withValues(alpha: 0.25 * _glow.value), blurRadius: 20)],
-                ),
-                child: Center(child: Text(widget.won ? '🏆' : '💀', style: const TextStyle(fontSize: 34))),
-              ),
-              const SizedBox(height: 12),
-              Text(widget.won ? 'LEVEL CLEAR!' : 'GAME OVER',
-                style: TextStyle(fontFamily: 'Courier', fontSize: 22, fontWeight: FontWeight.bold,
-                    color: borderColor, letterSpacing: 3,
-                    shadows: [Shadow(color: borderColor.withValues(alpha: 0.7 * _glow.value), blurRadius: 16)]),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(20),
-                    color: borderColor.withValues(alpha: 0.1),
-                    border: Border.all(color: borderColor.withValues(alpha: 0.25))),
-                child: Text(
-                    '${widget.ctrl.level.difficulty.label.toUpperCase()}  ·  STAGE ${widget.ctrl.level.stage}',
-                    style: TextStyle(fontFamily: 'Courier', fontSize: 9,
-                        color: borderColor.withValues(alpha: 0.8), letterSpacing: 2)),
-              ),
-              const SizedBox(height: 18),
-              if (widget.won) ...[
-                Text('FINAL SCORE', style: TextStyle(fontFamily: 'Courier', fontSize: 9,
-                    color: Colors.white.withValues(alpha: 0.35), letterSpacing: 3)),
-                const SizedBox(height: 3),
-                Text('${widget.ctrl.finalScore}', style: TextStyle(fontFamily: 'Courier', fontSize: 50,
-                    fontWeight: FontWeight.bold, color: widget.accent,
-                    shadows: [Shadow(color: widget.accent.withValues(alpha: 0.6 * _glow.value), blurRadius: 20)])),
-                const SizedBox(height: 10),
-                Row(children: [
-                  _StatChip(label: 'TIME LEFT', value: '${widget.ctrl.timeLeft}s', color: widget.accent),
-                  const SizedBox(width: 7),
-                  _StatChip(label: 'MOVES', value: '${widget.ctrl.moves}', color: widget.accent),
-                  const SizedBox(width: 7),
-                  _StatChip(label: 'PAIRS', value: '${widget.ctrl.totalPairs}', color: widget.accent),
-                ]),
-                const SizedBox(height: 18),
-                if (widget.onNextLevel != null) ...[
-                  _PrimaryBtn(label: '▶  NEXT LEVEL', color: widget.accent, onTap: widget.onNextLevel!),
-                  const SizedBox(height: 8),
-                  _Btn(label: '↺  REPLAY', color: Colors.white54, onTap: widget.onRestart),
-                ] else ...[
-                  _PrimaryBtn(label: '🏆  COMPLETE!', color: widget.accent, onTap: widget.onMainMenu),
-                  const SizedBox(height: 8),
-                  _Btn(label: '↺  REPLAY', color: Colors.white54, onTap: widget.onRestart),
-                ],
-              ] else ...[
-                Text('Time ran out!\nBetter luck next time.', textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.45), height: 1.6)),
-                const SizedBox(height: 20),
-                _PrimaryBtn(label: '↺  TRY AGAIN', color: widget.accent, onTap: widget.onRestart),
-              ],
-              const SizedBox(height: 8),
-              _Btn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: widget.onMainMenu),
-            ]),
-          ),
-        ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _s,
+    builder: (_, child) => Transform.scale(scale: _s.value, child: child),
+    child: Container(
+      width: 66, height: 66,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: widget.accent.withValues(alpha: .1),
+        border: Border.all(color: widget.accent.withValues(alpha: .35)),
+        boxShadow: [BoxShadow(color: widget.accent.withValues(alpha: .25), blurRadius: 16)],
       ),
-    );
-  }
+      child: const Center(child: Text('⏸', style: TextStyle(fontSize: 28))),
+    ),
+  );
 }
 
-class _StatChip extends StatelessWidget {
+class _Stat extends StatelessWidget {
+  final String label, value;
+  final Color  color;
+  const _Stat({required this.label, required this.value, required this.color});
+  @override
+  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
+    Text(label, style: TextStyle(fontFamily: 'Courier', fontSize: 8,
+        color: Colors.white.withValues(alpha: .3), letterSpacing: 2)),
+    const SizedBox(height: 4),
+    Text(value, style: TextStyle(fontFamily: 'Courier', fontSize: 14,
+        fontWeight: FontWeight.bold, color: color)),
+  ]);
+}
+
+class _VDiv extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) =>
+      Container(width: 1, height: 28, color: Colors.white.withValues(alpha: .08));
+}
+
+class _Chip extends StatelessWidget {
   final String label, value;
   final Color color;
-  const _StatChip({required this.label, required this.value, required this.color});
+  const _Chip({required this.label, required this.value, required this.color});
   @override
   Widget build(BuildContext context) => Expanded(
     child: Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        color: color.withValues(alpha: 0.07),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        color: color.withValues(alpha: .07),
+        border: Border.all(color: color.withValues(alpha: .2)),
       ),
       child: Column(children: [
         Text(label, style: TextStyle(fontFamily: 'Courier', fontSize: 7,
-            color: Colors.white.withValues(alpha: 0.35), letterSpacing: 1)),
+            color: Colors.white.withValues(alpha: .35), letterSpacing: 1)),
         const SizedBox(height: 3),
-        Text(value, style: TextStyle(fontFamily: 'Courier', fontSize: 15,
+        Text(value, style: TextStyle(fontFamily: 'Courier', fontSize: 14,
             fontWeight: FontWeight.bold, color: color)),
       ]),
     ),
@@ -523,9 +706,9 @@ class _PrimaryBtn extends StatelessWidget {
       width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        gradient: LinearGradient(colors: [color.withValues(alpha: 0.3), color.withValues(alpha: 0.12)]),
-        border: Border.all(color: color.withValues(alpha: 0.6), width: 1.5),
-        boxShadow: [BoxShadow(color: color.withValues(alpha: 0.25), blurRadius: 16)],
+        gradient: LinearGradient(colors: [color.withValues(alpha: .30), color.withValues(alpha: .12)]),
+        border: Border.all(color: color.withValues(alpha: .65), width: 1.5),
+        boxShadow: [BoxShadow(color: color.withValues(alpha: .28), blurRadius: 16)],
       ),
       child: Text(label, textAlign: TextAlign.center,
           style: TextStyle(fontFamily: 'Courier', color: color, fontSize: 14,
@@ -534,11 +717,11 @@ class _PrimaryBtn extends StatelessWidget {
   );
 }
 
-class _Btn extends StatelessWidget {
+class _SecBtn extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
-  const _Btn({required this.label, required this.color, required this.onTap});
+  const _SecBtn({required this.label, required this.color, required this.onTap});
   @override
   Widget build(BuildContext context) => GestureDetector(
     onTap: onTap,
@@ -546,8 +729,8 @@ class _Btn extends StatelessWidget {
       width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
-        color: Colors.white.withValues(alpha: 0.04),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+        color: Colors.white.withValues(alpha: .04),
+        border: Border.all(color: color.withValues(alpha: .38)),
       ),
       child: Text(label, textAlign: TextAlign.center,
           style: TextStyle(fontFamily: 'Courier', color: color, fontSize: 12,
