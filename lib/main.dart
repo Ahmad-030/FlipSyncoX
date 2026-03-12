@@ -149,11 +149,7 @@ class _SplashState extends State<SplashScreen> with TickerProviderStateMixin {
           const SizedBox(height: 52),
           FadeTransition(opacity: _subFade, child: _BounceDots(color: _kGreen)),
         ])),
-        Positioned(bottom: 22, left: 0, right: 0,
-            child: FadeTransition(opacity: _subFade,
-                child: Text('ARSALAN LIMITED PRODUCTION', textAlign: TextAlign.center,
-                    style: TextStyle(fontFamily: 'Courier', fontSize: 9, letterSpacing: 4,
-                        color: _kText.withValues(alpha: .18))))),
+
       ]),
     );
   }
@@ -252,8 +248,6 @@ class MainMenuScreen extends StatefulWidget {
 class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin {
   late final AnimationController _entry, _glow;
   late final Animation<double>   _glowAnim;
-  late final List<_BgCard>       _bgCards;
-  final _rng = Random();
 
   int  _currentLevelIndex = 0;
   bool _hasProgress        = false;
@@ -268,14 +262,6 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
     _entry = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000))..forward();
     _glow  = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat(reverse: true);
     _glowAnim = Tween<double>(begin: .3, end: 1.0).animate(CurvedAnimation(parent: _glow, curve: Curves.easeInOut));
-
-    final emojis = ['🔮','⚡','💎','🎯','🌙','🏆','🔥','🌊','🎲','✨'];
-    _bgCards = List.generate(10, (i) => _BgCard(
-      x: _rng.nextDouble(), y: _rng.nextDouble(),
-      size: 24 + _rng.nextDouble() * 30,
-      opacity: .025 + _rng.nextDouble() * .045,
-      emoji: emojis[i], rotation: _rng.nextDouble() * pi * 2,
-    ));
 
     _loadSavedProgress();
   }
@@ -293,7 +279,6 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
   @override void dispose() { _entry.dispose(); _glow.dispose(); super.dispose(); }
 
   Future<void> _onNewGame() async {
-    if (_launching) return;
     if (_hasProgress) {
       final confirm = await _showConfirmReset(context);
       if (!confirm) return;
@@ -301,6 +286,7 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
     await _resetProgress();
     if (!mounted) return;
     setState(() { _currentLevelIndex = 0; _hasProgress = false; });
+    _launching = false; // ensure guard is clear before starting
     _launchLevel(0);
   }
 
@@ -349,6 +335,7 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
     return await showGeneralDialog<bool>(
       context: ctx,
       barrierDismissible: true,
+      barrierLabel: 'Dismiss',
       barrierColor: Colors.black.withValues(alpha: .75),
       transitionDuration: const Duration(milliseconds: 260),
       transitionBuilder: (_, anim, __, child) => FadeTransition(opacity: anim,
@@ -372,90 +359,98 @@ class _MainMenuState extends State<MainMenuScreen> with TickerProviderStateMixin
     );
   }
 
+  DateTime? _lastBackPress;
+
   @override
   Widget build(BuildContext context) {
-    final sw = MediaQuery.of(context).size.width;
-    final sh = MediaQuery.of(context).size.height;
     final continueLevel = _hasProgress ? kAllLevels[_currentLevelIndex] : null;
 
-    return Scaffold(
-      backgroundColor: _kBg,
-      body: Stack(children: [
-        ..._bgCards.map((c) => Positioned(
-          left: c.x * sw, top: c.y * sh,
-          child: Transform.rotate(angle: c.rotation, child: Container(
-            width: c.size, height: c.size * 1.3,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(7),
-              border: Border.all(color: Colors.white.withValues(alpha: c.opacity)),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final now = DateTime.now();
+        if (_lastBackPress == null || now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
+          _lastBackPress = now;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Press back again to exit',
+                  style: TextStyle(fontFamily: 'Courier', letterSpacing: 1)),
+              duration: const Duration(seconds: 2),
+              backgroundColor: const Color(0xFF0B0F1C),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            child: Center(child: Text(c.emoji, style: TextStyle(fontSize: c.size * .38))),
+          );
+        } else {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: _kBg,
+        body: Stack(children: [
+          AnimatedBuilder(animation: _glowAnim, builder: (_, __) => Container(
+            decoration: BoxDecoration(gradient: RadialGradient(
+              center: const Alignment(0, -.65), radius: .7,
+              colors: [_kGreen.withValues(alpha: .08 * _glowAnim.value), Colors.transparent],
+            )),
           )),
-        )),
-        AnimatedBuilder(animation: _glowAnim, builder: (_, __) => Container(
-          decoration: BoxDecoration(gradient: RadialGradient(
-            center: const Alignment(0, -.65), radius: .7,
-            colors: [_kGreen.withValues(alpha: .08 * _glowAnim.value), Colors.transparent],
+          SafeArea(child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              const SizedBox(height: 50),
+              _Reveal(ctrl: _entry, delay: .00, child: const _Logo(size: 34)),
+              const SizedBox(height: 6),
+              _Reveal(ctrl: _entry, delay: .05, child: Text('MEMORY CARD GAME',
+                  style: TextStyle(fontFamily: 'Courier', fontSize: 10, letterSpacing: 5,
+                      color: _kText.withValues(alpha: .28)))),
+              const SizedBox(height: 48),
+
+              _Reveal(ctrl: _entry, delay: .10, child: _LevelJourneyMap(
+                currentIndex: _currentLevelIndex,
+                hasProgress: _hasProgress,
+                onLevelTap: (idx) {
+                  if (!_hasProgress && idx > 0) return;
+                  if (_hasProgress && idx > _currentLevelIndex) return;
+                  _launchLevel(idx);
+                },
+              )),
+              const SizedBox(height: 36),
+
+              _Reveal(ctrl: _entry, delay: .18, child: _MainMenuBtn(
+                icon: '🎮', label: 'NEW GAME', subtitle: 'Start from Easy · Stage 1',
+                accent: _kGreen, primary: true,
+                onTap: _loadingProgress ? null : _onNewGame,
+              )),
+              const SizedBox(height: 12),
+              _Reveal(ctrl: _entry, delay: .24, child: _MainMenuBtn(
+                icon: '▶', label: 'CONTINUE',
+                subtitle: continueLevel != null
+                    ? 'Resume ${continueLevel.difficulty.label.toUpperCase()} · Stage ${continueLevel.stage}'
+                    : 'No saved progress',
+                accent: _kCyan, primary: false,
+                enabled: _hasProgress && !_loadingProgress,
+                onTap: _hasProgress ? _onContinue : null,
+              )),
+              const SizedBox(height: 36),
+
+              _Reveal(ctrl: _entry, delay: .32, child: _SectionTag(label: 'MORE', accent: _kCyan)),
+              const SizedBox(height: 12),
+              _Reveal(ctrl: _entry, delay: .36, child: _NavTile(icon: '🏆', label: 'HIGH SCORE', accent: _kCyan,
+                  onTap: () => Navigator.push(context, _slideRoute(const HighScoreScreen())))),
+              const SizedBox(height: 9),
+              _Reveal(ctrl: _entry, delay: .40, child: _NavTile(icon: 'ℹ', label: 'ABOUT', accent: _kCyan,
+                  onTap: () => Navigator.push(context, _slideRoute(const AboutScreen())))),
+              const SizedBox(height: 9),
+              _Reveal(ctrl: _entry, delay: .44, child: _NavTile(icon: '🔒', label: 'PRIVACY POLICY', accent: _kCyan,
+                  onTap: () => Navigator.push(context, _slideRoute(const PrivacyPolicyScreen())))),
+              const SizedBox(height: 40),
+              const SizedBox(height: 30),
+            ]),
           )),
-        )),
-        SafeArea(child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
-            const SizedBox(height: 50),
-            _Reveal(ctrl: _entry, delay: .00, child: const _Logo(size: 34)),
-            const SizedBox(height: 6),
-            _Reveal(ctrl: _entry, delay: .05, child: Text('MEMORY CARD GAME',
-                style: TextStyle(fontFamily: 'Courier', fontSize: 10, letterSpacing: 5,
-                    color: _kText.withValues(alpha: .28)))),
-            const SizedBox(height: 48),
-
-            _Reveal(ctrl: _entry, delay: .10, child: _LevelJourneyMap(
-              currentIndex: _currentLevelIndex,
-              hasProgress: _hasProgress,
-              onLevelTap: (idx) {
-                if (!_hasProgress && idx > 0) return;
-                if (_hasProgress && idx > _currentLevelIndex) return;
-                _launchLevel(idx);
-              },
-            )),
-            const SizedBox(height: 36),
-
-            _Reveal(ctrl: _entry, delay: .18, child: _MainMenuBtn(
-              icon: '🎮', label: 'NEW GAME', subtitle: 'Start from Easy · Stage 1',
-              accent: _kGreen, primary: true,
-              onTap: _loadingProgress ? null : _onNewGame,
-            )),
-            const SizedBox(height: 12),
-            _Reveal(ctrl: _entry, delay: .24, child: _MainMenuBtn(
-              icon: '▶', label: 'CONTINUE',
-              subtitle: continueLevel != null
-                  ? 'Resume ${continueLevel.difficulty.label.toUpperCase()} · Stage ${continueLevel.stage}'
-                  : 'No saved progress',
-              accent: _kCyan, primary: false,
-              enabled: _hasProgress && !_loadingProgress,
-              onTap: _hasProgress ? _onContinue : null,
-            )),
-            const SizedBox(height: 36),
-
-            _Reveal(ctrl: _entry, delay: .32, child: _SectionTag(label: 'MORE', accent: _kCyan)),
-            const SizedBox(height: 12),
-            _Reveal(ctrl: _entry, delay: .36, child: _NavTile(icon: '🏆', label: 'HIGH SCORE', accent: _kCyan,
-                onTap: () => Navigator.push(context, _slideRoute(const HighScoreScreen())))),
-            const SizedBox(height: 9),
-            _Reveal(ctrl: _entry, delay: .40, child: _NavTile(icon: 'ℹ', label: 'ABOUT', accent: _kCyan,
-                onTap: () => Navigator.push(context, _slideRoute(const AboutScreen())))),
-            const SizedBox(height: 9),
-            _Reveal(ctrl: _entry, delay: .44, child: _NavTile(icon: '🔒', label: 'PRIVACY POLICY', accent: _kCyan,
-                onTap: () => Navigator.push(context, _slideRoute(const PrivacyPolicyScreen())))),
-            const SizedBox(height: 40),
-            _Reveal(ctrl: _entry, delay: .50, child: Text('v1.0.0  ·  Arsalan Limited Production',
-                style: TextStyle(fontFamily: 'Courier', fontSize: 9, letterSpacing: 2,
-                    color: _kText.withValues(alpha: .16)))),
-            const SizedBox(height: 30),
-          ]),
-        )),
-      ]),
-    );
+        ]),
+      ), // Scaffold
+    ); // PopScope
   }
 }
 
@@ -1299,8 +1294,6 @@ class _DotPainter extends CustomPainter {
   }
   @override bool shouldRepaint(_DotPainter o) => true;
 }
-
-class _BgCard { final double x, y, size, opacity, rotation; final String emoji; const _BgCard({required this.x, required this.y, required this.size, required this.opacity, required this.emoji, required this.rotation}); }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 PageRoute _fadeRoute(Widget page) => PageRouteBuilder(

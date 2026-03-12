@@ -506,8 +506,8 @@ class _TopBar extends StatelessWidget {
             style: const TextStyle(fontFamily: 'Courier', fontSize: 20,
                 fontWeight: FontWeight.w900, letterSpacing: 2.5),
             children: [
-              const TextSpan(text: 'FLIP',  style: TextStyle(color: Colors.white)),
-              TextSpan(text: 'SYNCO', style: TextStyle(color: accent)),
+              const TextSpan(text: 'Flip',  style: TextStyle(color: Colors.white)),
+              TextSpan(text: 'Synco', style: TextStyle(color: accent)),
               const TextSpan(text: 'X',     style: TextStyle(color: Colors.white)),
             ],
           )),
