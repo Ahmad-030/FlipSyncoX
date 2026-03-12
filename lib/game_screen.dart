@@ -17,7 +17,16 @@ Color _levelAccent(GameLevel level) {
 
 class GameScreen extends StatefulWidget {
   final GameLevel level;
-  const GameScreen({super.key, required this.level});
+
+  /// Called when the player wins this level. The menu uses this to
+  /// advance and save progress before popping the route.
+  final VoidCallback? onLevelComplete;
+
+  const GameScreen({
+    super.key,
+    required this.level,
+    this.onLevelComplete,
+  });
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -154,9 +163,20 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           _restartGame();
         },
         onMainMenu: () {
-          Navigator.pop(context);
-          Navigator.pop(context);
+          if (won) {
+            // Signal the menu to advance progress, then pop
+            widget.onLevelComplete?.call();
+          }
+          Navigator.pop(context); // close dialog
+          Navigator.pop(context); // close game screen
         },
+        onNextLevel: won && widget.onLevelComplete != null
+            ? () {
+          Navigator.pop(context); // close dialog
+          widget.onLevelComplete?.call(); // signals win → menu handles next level
+          Navigator.pop(context); // close game screen
+        }
+            : null,
       ),
     );
   }
@@ -349,8 +369,8 @@ class _ProgressRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final matched = ctrl.matchedPairs;
-    final total = ctrl.totalPairs;
-    final pct = total == 0 ? 0.0 : matched / total;
+    final total   = ctrl.totalPairs;
+    final pct     = total == 0 ? 0.0 : matched / total;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -360,25 +380,12 @@ class _ProgressRow extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'PAIRS FOUND',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 9,
-                  color: Colors.white.withValues(alpha: 0.35),
-                  letterSpacing: 2,
-                ),
-              ),
-              Text(
-                '$matched / $total',
-                style: TextStyle(
-                  fontFamily: 'Courier',
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: accent,
-                  letterSpacing: 1,
-                ),
-              ),
+              Text('PAIRS FOUND',
+                  style: TextStyle(fontFamily: 'Courier', fontSize: 9,
+                      color: Colors.white.withValues(alpha: 0.35), letterSpacing: 2)),
+              Text('$matched / $total',
+                  style: TextStyle(fontFamily: 'Courier', fontSize: 11,
+                      fontWeight: FontWeight.bold, color: accent, letterSpacing: 1)),
             ],
           ),
           const SizedBox(height: 5),
@@ -419,25 +426,13 @@ class _ScorePreviewBar extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              'SCORE PREVIEW  ',
-              style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 10,
-                color: Colors.white.withValues(alpha: 0.3),
-                letterSpacing: 2,
-              ),
-            ),
-            Text(
-              '${ctrl.currentScore}',
-              style: TextStyle(
-                fontFamily: 'Courier',
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: accent,
-                shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 12)],
-              ),
-            ),
+            Text('SCORE PREVIEW  ',
+                style: TextStyle(fontFamily: 'Courier', fontSize: 10,
+                    color: Colors.white.withValues(alpha: 0.3), letterSpacing: 2)),
+            Text('${ctrl.currentScore}',
+                style: TextStyle(fontFamily: 'Courier', fontSize: 22,
+                    fontWeight: FontWeight.w900, color: accent,
+                    shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 12)])),
           ],
         ),
       ),
@@ -467,8 +462,7 @@ class _IconBtn extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: size,
-        height: size,
+        width: size, height: size,
         decoration: BoxDecoration(
           color: accent.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(10),
@@ -515,24 +509,13 @@ class _PauseDialog extends StatelessWidget {
             children: [
               const Text('⏸', style: TextStyle(fontSize: 36)),
               const SizedBox(height: 8),
-              const Text(
-                'PAUSED',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: 4,
-                ),
-              ),
+              const Text('PAUSED',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold,
+                      color: Colors.white, letterSpacing: 4)),
               const SizedBox(height: 4),
-              Text(
-                'GAME IS PAUSED',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.white.withValues(alpha: 0.3),
-                  letterSpacing: 2,
-                ),
-              ),
+              Text('GAME IS PAUSED',
+                  style: TextStyle(fontSize: 10,
+                      color: Colors.white.withValues(alpha: 0.3), letterSpacing: 2)),
               const SizedBox(height: 28),
               _OverlayBtn(
                 label: '▶  RESUME',
@@ -563,6 +546,7 @@ class _GameOverDialog extends StatelessWidget {
   final bool won;
   final VoidCallback onRestart;
   final VoidCallback onMainMenu;
+  final VoidCallback? onNextLevel; // null when no next level exists
 
   const _GameOverDialog({
     required this.ctrl,
@@ -570,6 +554,7 @@ class _GameOverDialog extends StatelessWidget {
     required this.won,
     required this.onRestart,
     required this.onMainMenu,
+    this.onNextLevel,
   });
 
   @override
@@ -593,53 +578,42 @@ class _GameOverDialog extends StatelessWidget {
               Text(won ? '🏆' : '💀', style: const TextStyle(fontSize: 52)),
               const SizedBox(height: 10),
               Text(
-                won ? 'YOU WIN!' : 'GAME OVER',
+                won ? 'LEVEL CLEAR!' : 'GAME OVER',
                 style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: borderColor,
-                  letterSpacing: 3,
+                  fontSize: 24, fontWeight: FontWeight.bold,
+                  color: borderColor, letterSpacing: 3,
                   shadows: [Shadow(color: borderColor.withValues(alpha: 0.7), blurRadius: 16)],
                 ),
               ),
               const SizedBox(height: 20),
               if (won) ...[
-                Text(
-                  'FINAL SCORE',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.white.withValues(alpha: 0.35),
-                    letterSpacing: 3,
-                  ),
-                ),
+                Text('FINAL SCORE',
+                    style: TextStyle(fontSize: 10,
+                        color: Colors.white.withValues(alpha: 0.35), letterSpacing: 3)),
                 const SizedBox(height: 6),
-                Text(
-                  '${ctrl.finalScore}',
-                  style: TextStyle(
-                    fontSize: 54,
-                    fontWeight: FontWeight.bold,
-                    color: accent,
-                    shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 20)],
-                  ),
-                ),
+                Text('${ctrl.finalScore}',
+                    style: TextStyle(fontSize: 54, fontWeight: FontWeight.bold, color: accent,
+                        shadows: [Shadow(color: accent.withValues(alpha: 0.6), blurRadius: 20)])),
                 const SizedBox(height: 14),
-                _StatRow(label: 'Time Left', value: '${ctrl.timeLeft}s', accent: accent),
-                _StatRow(label: 'Moves Used', value: '${ctrl.moves}', accent: accent),
-                _StatRow(label: 'Level', value: ctrl.level.label, accent: accent),
+                _StatRow(label: 'Time Left',  value: '${ctrl.timeLeft}s', accent: accent),
+                _StatRow(label: 'Moves Used', value: '${ctrl.moves}',     accent: accent),
+                _StatRow(label: 'Level',      value: ctrl.level.label,    accent: accent),
                 const SizedBox(height: 20),
               ] else ...[
-                Text(
-                  'Time ran out!\nBetter luck next time.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.white.withValues(alpha: 0.45),
-                    height: 1.6,
-                  ),
-                ),
+                Text('Time ran out!\nBetter luck next time.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13,
+                        color: Colors.white.withValues(alpha: 0.45), height: 1.6)),
                 const SizedBox(height: 24),
               ],
-              _OverlayBtn(label: '↺  PLAY AGAIN', color: accent, onTap: onRestart),
+              // Primary action: next level (if won) or retry
+              if (won && onNextLevel != null) ...[
+                _OverlayBtn(label: '▶  NEXT LEVEL', color: accent, onTap: onNextLevel!),
+                const SizedBox(height: 8),
+                _OverlayBtn(label: '↺  REPLAY',     color: Colors.white54, onTap: onRestart),
+              ] else ...[
+                _OverlayBtn(label: '↺  TRY AGAIN', color: accent, onTap: onRestart),
+              ],
               const SizedBox(height: 8),
               _OverlayBtn(label: '⌂  MAIN MENU', color: Colors.white38, onTap: onMainMenu),
             ],
@@ -651,8 +625,7 @@ class _GameOverDialog extends StatelessWidget {
 }
 
 class _StatRow extends StatelessWidget {
-  final String label;
-  final String value;
+  final String label, value;
   final Color accent;
   const _StatRow({required this.label, required this.value, required this.accent});
 
@@ -663,14 +636,10 @@ class _StatRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.4), letterSpacing: 1),
-          ),
-          Text(
-            value,
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: accent),
-          ),
+          Text(label,
+              style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.4), letterSpacing: 1)),
+          Text(value,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: accent)),
         ],
       ),
     );
@@ -679,7 +648,7 @@ class _StatRow extends StatelessWidget {
 
 class _OverlayBtn extends StatelessWidget {
   final String label;
-  final Color color;
+  final Color  color;
   final VoidCallback onTap;
   const _OverlayBtn({required this.label, required this.color, required this.onTap});
 
@@ -695,16 +664,10 @@ class _OverlayBtn extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.04),
           border: Border.all(color: color.withValues(alpha: 0.4)),
         ),
-        child: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: color,
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 2,
-          ),
-        ),
+        child: Text(label,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: color, fontSize: 12,
+                fontWeight: FontWeight.bold, letterSpacing: 2)),
       ),
     );
   }
